@@ -1,0 +1,1168 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#1E293B" />
+  <title>Turismo 360 · Secretaría de Turismo y OCV</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'] }
+        }
+      }
+    };
+  </script>
+
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+
+  <style>
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    ::selection { background: #1E293B; color: #fff; }
+
+    * { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+    *::-webkit-scrollbar { width: 7px; height: 7px; }
+    *::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 2px; }
+    *::-webkit-scrollbar-track { background: transparent; }
+
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    .anim-fade { animation: fadeIn .3s ease-out both; }
+
+    @keyframes splashBar { from { width: 0%; } to { width: 100%; } }
+    .splash-bar { animation: splashBar 1.3s cubic-bezier(.4,0,.2,1) forwards; }
+
+    input[type="date"]::-webkit-calendar-picker-indicator { opacity: .45; cursor: pointer; }
+    select option { color: #0f172a; }
+
+    .tabular { font-variant-numeric: tabular-nums; }
+
+    @media print {
+      header, .no-print { display: none !important; }
+      body { background: #fff !important; }
+    }
+  </style>
+</head>
+<body class="min-h-screen bg-[#F4F5F7] text-[#1E293B]">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwMfm9Fk2v6Q-ysnlB9VLmYukU1F_7sSk1cDL-LsapnhAAK-3WAVKMQoG8u1AmfEZG5eg/exec";
+    const REFRESH_MS = 60000;
+
+    async function cloudRequest(payload) {
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload)
+      });
+      const raw = await res.text();
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch (e) {
+        throw new Error("La respuesta no fue JSON: " + raw.slice(0, 200));
+      }
+      if (data.status !== 'success') throw new Error(data.message || 'Error en el servidor');
+      return data;
+    }
+
+    async function cloudLoad() {
+      const res = await fetch(APPS_SCRIPT_URL + "?t=" + Date.now());
+      const raw = await res.text();
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch (e) {
+        throw new Error("La respuesta no fue JSON: " + raw.slice(0, 200));
+      }
+      if (data.status !== 'success') throw new Error(data.message || 'Error en el servidor');
+      return data;
+    }
+
+    function App() {
+      const [showSplash, setShowSplash] = useState(true);
+      const [projects, setProjects] = useState([]);
+      const [events, setEvents] = useState([]);
+      const [infrastructure, setInfrastructure] = useState([]);
+      const [darkMode, setDarkMode] = useState(false);
+
+      const [selectedProject, setSelectedProject] = useState(null);
+      const [isAdminOpen, setIsAdminOpen] = useState(false);
+      const [statusFilter, setStatusFilter] = useState('todos');
+      const [sortBy, setSortBy] = useState('asc');
+      const [searchTerm, setSearchTerm] = useState('');
+      const [isLoading, setIsLoading] = useState(false);
+
+      const [syncState, setSyncState] = useState('loading');
+      const [lastSync, setLastSync] = useState(null);
+      const busyRef = useRef(false);
+
+      const [toast, setToast] = useState(null);
+      const toastTimer = useRef(null);
+
+      const [isAuthenticated, setIsAuthenticated] = useState(false);
+      const [loginUser, setLoginUser] = useState('');
+      const [loginPass, setLoginPass] = useState('');
+      const [authError, setAuthError] = useState('');
+
+      const [editId, setEditId] = useState(null);
+      const [title, setTitle] = useState('');
+      const [percentage, setPercentage] = useState(0);
+      const [color, setColor] = useState('bg-slate-700');
+      const [status, setStatus] = useState('en-tiempo');
+      const [notes, setNotes] = useState('');
+      const [driveUrl, setDriveUrl] = useState('');
+      const [updatesList, setUpdatesList] = useState([]);
+      const [newUpdateText, setNewUpdateText] = useState('');
+
+      const [eventTitle, setEventTitle] = useState('');
+      const [eventDate, setEventDate] = useState('');
+      const [eventTime, setEventTime] = useState('');
+
+      const [currentDate, setCurrentDate] = useState(new Date());
+
+      const showToast = (message, type = 'error') => {
+        setToast({ message, type });
+        clearTimeout(toastTimer.current);
+        toastTimer.current = setTimeout(() => setToast(null), 4200);
+      };
+
+      useEffect(() => {
+        const splashTimer = setTimeout(() => setShowSplash(false), 1400);
+        return () => clearTimeout(splashTimer);
+      }, []);
+
+      useEffect(() => {
+        const onKey = (e) => { if (e.key === 'Escape') setSelectedProject(null); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+      }, []);
+
+      const loadFromCloud = async (silent = false) => {
+        if (busyRef.current) return;
+        if (!silent) setSyncState('loading');
+        try {
+          const data = await cloudLoad();
+          if (data.projects) setProjects(data.projects);
+          else setProjects([]);
+          if (data.events) setEvents(data.events);
+          else setEvents([]);
+          if (data.infrastructure) setInfrastructure(data.infrastructure);
+          else setInfrastructure([]);
+          setSyncState('ok');
+          setLastSync(new Date());
+        } catch (error) {
+          console.error("Error al leer:", error);
+          setSyncState('error');
+        }
+      };
+
+      useEffect(() => {
+        loadFromCloud();
+        const timer = setInterval(() => { if (!document.hidden) loadFromCloud(true); }, REFRESH_MS);
+        return () => clearInterval(timer);
+      }, []);
+
+      const handleLogin = async (e) => {
+        e.preventDefault();
+        setIsLoading(true);
+        try {
+          await cloudRequest({ action: 'login', user: loginUser, pass: loginPass });
+          setIsAuthenticated(true);
+          setAuthError('');
+          window._authU = loginUser;
+          window._authP = loginPass;
+          setLoginUser('');
+          setLoginPass('');
+          showToast('Sesión iniciada correctamente.', 'success');
+        } catch (error) {
+          setAuthError('Usuario o contraseña incorrectos.');
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      const handleLogout = () => {
+        setIsAuthenticated(false);
+        setIsAdminOpen(false);
+        window._authU = '';
+        window._authP = '';
+        resetForm();
+      };
+
+      const handleUpdateChange = (index, newText) => {
+        const updated = [...updatesList];
+        updated[index] = { ...updated[index], text: newText };
+        setUpdatesList(updated);
+      };
+
+      const handleDeleteUpdate = (index) => {
+        setUpdatesList(updatesList.filter((_, i) => i !== index));
+      };
+
+      const handleSaveProject = async (e) => {
+        e.preventDefault();
+        if (!title.trim()) return;
+
+        const finalUpdates = [...updatesList];
+        if (newUpdateText.trim()) {
+          finalUpdates.push({ date: new Date().toISOString().split('T')[0], text: newUpdateText.trim() });
+        }
+
+        let projId = editId;
+        if (!projId) {
+          const nums = projects.map(p => parseInt(p.id, 10)).filter(n => !isNaN(n));
+          const nextNum = (nums.length ? Math.max(...nums) : 0) + 1;
+          projId = nextNum < 10 ? "0" + nextNum : String(nextNum);
+        }
+
+        const payload = {
+          id: projId,
+          title: title.trim(),
+          percentage: Number(percentage),
+          status,
+          color,
+          notes,
+          driveUrl: driveUrl.trim(),
+          updates: finalUpdates
+        };
+
+        busyRef.current = true;
+        setIsLoading(true);
+        try {
+          const data = await cloudRequest({ action: 'saveProject', user: window._authU, pass: window._authP, project: payload });
+          const saved = data.project || payload;
+          setProjects(prev => editId ? prev.map(p => p.id === editId ? saved : p) : [...prev, saved]);
+          if (selectedProject?.id === saved.id) setSelectedProject(saved);
+          resetForm();
+          showToast(editId ? 'Pendiente actualizado.' : 'Pendiente anexado.', 'success');
+        } catch (error) {
+          showToast("Error al guardar: " + error.message, 'error');
+        } finally {
+          busyRef.current = false;
+          setIsLoading(false);
+        }
+      };
+
+      const handleDeleteProject = async (proj) => {
+        if (!proj) return;
+        if (!window.confirm('¿Deseas eliminar "' + proj.title + '"?')) return;
+        busyRef.current = true;
+        setIsLoading(true);
+        try {
+          await cloudRequest({ action: 'deleteProject', user: window._authU, pass: window._authP, id: proj.id, folderUrl: proj.driveUrl });
+          setProjects(prev => prev.filter(p => p.id !== proj.id));
+          if (selectedProject?.id === proj.id) setSelectedProject(null);
+          if (editId === proj.id) resetForm();
+          showToast('Pendiente eliminado.', 'success');
+        } catch (error) {
+          showToast("Error: " + error.message, 'error');
+        } finally {
+          busyRef.current = false;
+          setIsLoading(false);
+        }
+      };
+
+      const handleEditClick = (p) => {
+        setEditId(p.id);
+        setTitle(p.title);
+        setPercentage(p.percentage);
+        setColor(p.color || 'bg-slate-700');
+        setStatus(p.status || 'en-tiempo');
+        setNotes(p.notes || '');
+        setDriveUrl(p.driveUrl || '');
+        setUpdatesList(p.updates || []);
+        setNewUpdateText('');
+      };
+
+      const resetForm = () => {
+        setEditId(null);
+        setTitle('');
+        setPercentage(0);
+        setColor('bg-slate-700');
+        setStatus('en-tiempo');
+        setNotes('');
+        setDriveUrl('');
+        setUpdatesList([]);
+        setNewUpdateText('');
+      };
+
+      const handleSaveEvent = async (e) => {
+        e.preventDefault();
+        if (!eventTitle || !eventDate) return;
+        const newEv = { id: String(Date.now()), title: eventTitle, date: eventDate, time: eventTime || 'Todo el día' };
+
+        busyRef.current = true;
+        setIsLoading(true);
+        try {
+          await cloudRequest({ action: 'saveEvent', user: window._authU, pass: window._authP, event: newEv });
+          setEvents(prev => [...prev, newEv]);
+          setEventTitle('');
+          setEventDate('');
+          setEventTime('');
+          showToast('Reunión programada.', 'success');
+        } catch (error) {
+          showToast("Error al guardar reunión: " + error.message, 'error');
+        } finally {
+          busyRef.current = false;
+          setIsLoading(false);
+        }
+      };
+
+      const handleDeleteEvent = async (id) => {
+        busyRef.current = true;
+        setIsLoading(true);
+        try {
+          await cloudRequest({ action: 'deleteEvent', user: window._authU, pass: window._authP, id });
+          setEvents(prev => prev.filter(ev => ev.id !== id));
+        } catch (error) {
+          showToast("Error al eliminar reunión: " + error.message, 'error');
+        } finally {
+          busyRef.current = false;
+          setIsLoading(false);
+        }
+      };
+
+      const handleExportPDF = () => {
+        const element = document.getElementById('exportable-area');
+        html2pdf().set({
+          margin: 0.3,
+          filename: "Reporte_Turismo360_" + new Date().toISOString().split('T')[0] + ".pdf",
+          image: { type: 'jpeg', quality: 0.98 },
+          html2canvas: { scale: 2, useCORS: true, backgroundColor: darkMode ? '#0F172A' : '#ffffff' },
+          jsPDF: { unit: 'in', format: 'letter', orientation: 'landscape' }
+        }).from(element).save();
+      };
+
+      const getDaysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
+      const getFirstDayOfMonth = (y, m) => new Date(y, m, 1).getDay();
+
+      const year = currentDate.getFullYear();
+      const month = currentDate.getMonth();
+      const monthNames = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+
+      const daysInMonth = getDaysInMonth(year, month);
+      const firstDay = getFirstDayOfMonth(year, month);
+      const calendarDays = [];
+      for (let i = 0; i < firstDay; i++) calendarDays.push(null);
+      for (let d = 1; d <= daysInMonth; d++) calendarDays.push(d);
+
+      const prevMonth = () => setCurrentDate(new Date(year, month - 1, 1));
+      const nextMonth = () => setCurrentDate(new Date(year, month + 1, 1));
+
+      const totalProjectsCount = projects.length;
+      const onTimeCount = projects.filter(p => p.status === 'en-tiempo').length;
+      const completedCount = projects.filter(p => p.status === 'completado' || Number(p.percentage) === 100).length;
+      const delayedCount = projects.filter(p => p.status === 'demorado').length;
+      const stoppedCount = projects.filter(p => p.status === 'detenido').length;
+      const healthScore = totalProjectsCount > 0 ? Math.round(((onTimeCount + completedCount) / totalProjectsCount) * 100) : 100;
+
+      const searchedProjects = projects.filter(p =>
+        !searchTerm.trim() || String(p.title || '').toLowerCase().includes(searchTerm.trim().toLowerCase())
+      );
+      const filteredProjects = searchedProjects.filter(p => statusFilter === 'todos' || p.status === statusFilter);
+
+      const sortedAndFilteredProjects = [...filteredProjects].sort((a, b) => {
+        const pa = Number(a.percentage) || 0;
+        const pb = Number(b.percentage) || 0;
+        if (sortBy === 'asc' && pa !== pb) return pa - pb;
+        if (sortBy === 'desc' && pa !== pb) return pb - pa;
+        return String(a.id).localeCompare(String(b.id), 'es', { numeric: true });
+      });
+
+      const sortedEvents = [...events].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+      const lastSyncText = lastSync ? lastSync.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }) : '';
+
+      const todayReal = new Date();
+      const todayYear = todayReal.getFullYear();
+      const todayMonth = todayReal.getMonth();
+      const todayDate = todayReal.getDate();
+
+      /* ---------------- Tokens de diseño ---------------- */
+      const surface = darkMode ? "bg-slate-900 border-slate-800" : "bg-white border-slate-200";
+      const panel = "rounded border transition-colors duration-200 " + surface;
+      const inset = darkMode ? "bg-slate-800/50 border-slate-700" : "bg-slate-50 border-slate-200";
+      const muted = darkMode ? "text-slate-400" : "text-slate-500";
+      const faint = darkMode ? "text-slate-500" : "text-slate-400";
+      const heading = darkMode ? "text-slate-100" : "text-slate-900";
+
+      const inputCls = "w-full rounded border px-2.5 py-2 text-[13px] outline-none transition focus:ring-2 " + (
+        darkMode
+          ? "bg-slate-800/60 border-slate-700 text-slate-100 placeholder-slate-500 focus:border-slate-500 focus:ring-slate-600/30"
+          : "bg-white border-slate-300 text-slate-800 placeholder-slate-400 focus:border-slate-500 focus:ring-slate-400/20"
+      );
+      const labelCls = "block text-[10px] font-semibold uppercase tracking-[0.1em] mb-1.5 " + muted;
+
+      /* Estado: color + etiqueta en versalitas, sin píldora */
+      const statusMeta = {
+        'en-tiempo':  { label: 'En tiempo',  text: 'text-emerald-700', dark: 'text-emerald-400', rule: 'border-l-emerald-600', bar: 'bg-emerald-600', dot: 'bg-emerald-600' },
+        'demorado':   { label: 'Demorado',   text: 'text-amber-700',   dark: 'text-amber-400',   rule: 'border-l-amber-500',   bar: 'bg-amber-500',   dot: 'bg-amber-500' },
+        'detenido':   { label: 'Detenido',   text: 'text-rose-700',    dark: 'text-rose-400',    rule: 'border-l-rose-600',    bar: 'bg-rose-600',    dot: 'bg-rose-600' },
+        'completado': { label: 'Completado', text: 'text-slate-600',   dark: 'text-slate-300',   rule: 'border-l-slate-500',   bar: 'bg-slate-500',   dot: 'bg-slate-500' }
+      };
+      const metaOf = (st) => statusMeta[st] || { label: 'Sin estado', text: 'text-slate-500', dark: 'text-slate-400', rule: 'border-l-slate-400', bar: 'bg-slate-400', dot: 'bg-slate-400' };
+
+      const StatusLabel = ({ st, className = '' }) => {
+        const m = metaOf(st);
+        return (
+          <span className={"inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.1em] " + (darkMode ? m.dark : m.text) + " " + className}>
+            <span className={"w-1.5 h-1.5 rounded-full " + m.dot}></span>
+            {m.label}
+          </span>
+        );
+      };
+
+      const lastUpdateOf = (p) => {
+        if (!p.updates || p.updates.length === 0) return 'Sin bitácora';
+        const last = p.updates[p.updates.length - 1];
+        if (!last || !last.date) return 'Sin bitácora';
+        const parts = String(last.date).split('-');
+        if (parts.length !== 3) return String(last.date);
+        const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+        return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short' });
+      };
+
+      const filterPills = [
+        { key: 'todos', label: 'Todos', count: totalProjectsCount },
+        { key: 'en-tiempo', label: 'En tiempo', count: onTimeCount },
+        { key: 'demorado', label: 'Demorado', count: delayedCount },
+        { key: 'detenido', label: 'Detenido', count: stoppedCount },
+        { key: 'completado', label: 'Completado', count: completedCount }
+      ];
+
+      const sortOptions = [
+        { key: 'asc', label: 'Menor avance' },
+        { key: 'desc', label: 'Mayor avance' },
+        { key: 'default', label: 'Registro' }
+      ];
+
+      const sortCaption = sortBy === 'asc'
+        ? 'Ordenado de menor a mayor avance'
+        : sortBy === 'desc'
+          ? 'Ordenado de mayor a menor avance'
+          : 'Orden original de registro';
+
+      const kpis = [
+        { label: 'Total pendientes', value: totalProjectsCount, tone: heading },
+        { label: 'Índice de salud', value: healthScore + '%', tone: darkMode ? 'text-emerald-400' : 'text-emerald-700' },
+        { label: 'Demorados', value: delayedCount, tone: darkMode ? 'text-amber-400' : 'text-amber-700' },
+        { label: 'Detenidos', value: stoppedCount, tone: darkMode ? 'text-rose-400' : 'text-rose-700' }
+      ];
+
+      const distribution = [
+        { label: 'En tiempo', count: onTimeCount, bar: 'bg-emerald-600' },
+        { label: 'Completado', count: completedCount, bar: 'bg-slate-500' },
+        { label: 'Demorado', count: delayedCount, bar: 'bg-amber-500' },
+        { label: 'Detenido', count: stoppedCount, bar: 'bg-rose-600' }
+      ];
+
+      return (
+        <div className={"min-h-screen transition-colors duration-200 " + (darkMode ? "bg-[#0F172A] text-slate-100" : "bg-[#F4F5F7] text-[#1E293B]")}>
+
+          {/* ============ SPLASH ============ */}
+          <div className={"fixed inset-0 z-[70] flex flex-col items-center justify-center bg-[#1E293B] text-white transition-opacity duration-500 " + (showSplash ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none")}>
+            <div className="flex items-center gap-4 mb-6">
+              <img src="logotipo-ocv-monterrey.svg" alt="OCV Monterrey" className="h-11 object-contain" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+              <div className="w-px h-9 bg-white/25"></div>
+              <img src="Logo_de_la_Secretaría_de_Trabajo_de_Nuevo_León_(2021).svg" alt="Secretaría de Trabajo" className="h-11 object-contain" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+            </div>
+            <h1 className="text-2xl md:text-3xl font-semibold tracking-[0.22em] uppercase text-center px-4">Turismo 360</h1>
+            <p className="text-slate-400 tracking-[0.18em] text-[10px] font-medium mt-2 uppercase text-center">Project Management &amp; Monitoring Platform</p>
+            <p className="text-slate-500 tracking-[0.14em] text-[10px] font-medium mt-1 uppercase text-center">Secretaría de Turismo y OCV</p>
+            <div className="mt-8 w-48 h-px bg-white/15 overflow-hidden">
+              <div className="splash-bar h-full bg-white/70"></div>
+            </div>
+          </div>
+
+          {/* ============ BARRA DE CARGA ============ */}
+          <div className={"fixed top-0 left-0 right-0 z-[65] h-[2px] transition-opacity duration-300 " + (isLoading ? "opacity-100" : "opacity-0")}>
+            <div className="h-full w-full bg-slate-600 animate-pulse"></div>
+          </div>
+
+          {/* ============ TOAST ============ */}
+          {toast && (
+            <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-[80] anim-fade w-[calc(100%-2rem)] max-w-md">
+              <div className={"flex items-start gap-2.5 rounded border px-3.5 py-2.5 shadow-lg " + (
+                toast.type === 'success'
+                  ? (darkMode ? "bg-slate-800 border-slate-700 text-slate-100" : "bg-white border-slate-300 text-slate-800")
+                  : (darkMode ? "bg-slate-800 border-rose-800 text-rose-200" : "bg-white border-rose-300 text-rose-800")
+              )}>
+                <span className={"mt-1 w-1.5 h-1.5 rounded-full shrink-0 " + (toast.type === 'success' ? "bg-emerald-600" : "bg-rose-600")}></span>
+                <p className="text-[12px] font-medium leading-relaxed flex-1">{toast.message}</p>
+                <button onClick={() => setToast(null)} className="text-[10px] font-semibold uppercase tracking-[0.08em] opacity-50 hover:opacity-100 transition">Cerrar</button>
+              </div>
+            </div>
+          )}
+
+          {/* ============ HEADER ============ */}
+          <header className={"sticky top-0 z-40 border-b transition-colors duration-200 " + (
+            darkMode ? "bg-[#0F172A]/95 border-slate-800" : "bg-white/95 border-slate-200"
+          )}>
+            <div className="max-w-[1360px] mx-auto px-4 md:px-7 py-3 flex items-center justify-between gap-4">
+
+              <div className="flex items-center gap-3 shrink-0">
+                <img src="logotipo-ocv-monterrey.svg" alt="OCV Monterrey" className="h-8 md:h-9 object-contain" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+              </div>
+
+              <div className="text-center flex-1 min-w-0">
+                <h1 className={"text-base md:text-lg font-semibold tracking-[0.16em] uppercase leading-tight " + heading}>
+                  Turismo 360
+                </h1>
+                <p className={"tracking-[0.12em] text-[9px] md:text-[10px] font-medium uppercase mt-0.5 " + muted}>
+                  Secretaría de Turismo y OCV · Seguimiento de proyectos
+                </p>
+                <div className="mt-1 flex items-center justify-center">
+                  {syncState === 'loading' && (
+                    <span className={"text-[10px] font-medium " + muted}>Conectando con Google Drive…</span>
+                  )}
+                  {syncState === 'ok' && (
+                    <span className={"text-[10px] font-medium " + muted}>Sincronizado · última lectura {lastSyncText}</span>
+                  )}
+                  {syncState === 'error' && (
+                    <span className="text-[10px] font-medium text-rose-600">Sin conexión con Google Sheets</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <img src="Logo_de_la_Secretaría_de_Trabajo_de_Nuevo_León_(2021).svg" alt="Secretaría de Trabajo" className="h-8 md:h-9 object-contain hidden sm:block" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+
+                <button
+                  onClick={() => setDarkMode(!darkMode)}
+                  aria-label={darkMode ? 'Activar modo día' : 'Activar modo noche'}
+                  title={darkMode ? 'Modo día' : 'Modo noche'}
+                  className={"h-8 px-2.5 rounded border text-[10px] font-semibold uppercase tracking-[0.08em] transition " + (
+                    darkMode ? "bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700" : "bg-white border-slate-300 text-slate-600 hover:bg-slate-50"
+                  )}
+                >
+                  {darkMode ? 'Día' : 'Noche'}
+                </button>
+
+                {isAuthenticated ? (
+                  <>
+                    <button
+                      onClick={() => setIsAdminOpen(!isAdminOpen)}
+                      className={"h-8 px-3 rounded border text-[10px] font-semibold uppercase tracking-[0.08em] transition " + (
+                        darkMode ? "bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700" : "bg-white border-slate-300 text-slate-700 hover:bg-slate-50"
+                      )}
+                    >
+                      {isAdminOpen ? 'Ocultar panel' : 'Panel admin'}
+                    </button>
+                    <button
+                      onClick={handleLogout}
+                      className={"h-8 px-3 rounded border text-[10px] font-semibold uppercase tracking-[0.08em] transition " + (
+                        darkMode ? "bg-slate-800 border-slate-700 text-rose-300 hover:bg-slate-700" : "bg-white border-slate-300 text-rose-700 hover:bg-rose-50"
+                      )}
+                    >
+                      Salir
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => setIsAdminOpen(!isAdminOpen)}
+                    className={"h-8 px-3.5 rounded text-[10px] font-semibold uppercase tracking-[0.08em] transition " + (
+                      darkMode ? "bg-slate-100 text-slate-900 hover:bg-white" : "bg-[#1E293B] text-white hover:bg-slate-800"
+                    )}
+                  >
+                    Acceso admin
+                  </button>
+                )}
+              </div>
+            </div>
+          </header>
+
+          <main className="max-w-[1360px] mx-auto px-4 md:px-7 pt-5 pb-14">
+
+            {/* ============ INDICADORES ============ */}
+            <section className={"grid grid-cols-2 lg:grid-cols-4 gap-px mb-4 rounded border overflow-hidden anim-fade " + (darkMode ? "bg-slate-800 border-slate-800" : "bg-slate-200 border-slate-200")}>
+              {kpis.map((k, i) => (
+                <div key={i} className={"p-4 " + (darkMode ? "bg-slate-900" : "bg-white")}>
+                  <p className={"text-[10px] font-semibold uppercase tracking-[0.1em] " + muted}>{k.label}</p>
+                  <p className={"text-2xl font-semibold mt-1.5 tabular " + k.tone}>{k.value}</p>
+                </div>
+              ))}
+            </section>
+
+            {/* ============ DISTRIBUCIÓN ============ */}
+            <section className={panel + " p-4 mb-4"}>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
+                <h3 className={"text-[10px] font-semibold uppercase tracking-[0.1em] " + muted}>Distribución por estado</h3>
+                <span className={"text-[10px] font-medium " + faint}>{totalProjectsCount} registros</span>
+              </div>
+              <div className={"h-1.5 w-full flex overflow-hidden rounded-sm " + (darkMode ? "bg-slate-800" : "bg-slate-100")}>
+                {totalProjectsCount === 0 ? (
+                  <div className="h-full w-full bg-slate-300/50"></div>
+                ) : (
+                  distribution.map((d, i) => d.count > 0 && (
+                    <div key={i} className={"h-full " + d.bar} style={{ width: (d.count / totalProjectsCount * 100) + "%" }} title={d.label + ': ' + d.count}></div>
+                  ))
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 mt-2.5">
+                {distribution.map((d, i) => (
+                  <span key={i} className={"inline-flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.06em] " + muted}>
+                    <span className={"w-1.5 h-1.5 rounded-full " + d.bar}></span>
+                    {d.label}
+                    <b className={"tabular " + heading}>{d.count}</b>
+                  </span>
+                ))}
+              </div>
+            </section>
+
+            {/* ============ HERRAMIENTAS ============ */}
+            <section className={panel + " p-3 mb-4 no-print"}>
+              <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className={"text-[10px] font-semibold uppercase tracking-[0.1em] mr-1.5 " + muted}>Estado</span>
+                  {filterPills.map(f => {
+                    const active = statusFilter === f.key;
+                    return (
+                      <button
+                        key={f.key}
+                        onClick={() => setStatusFilter(f.key)}
+                        className={"text-[11px] px-2.5 py-1.5 rounded border font-medium transition " + (
+                          active
+                            ? (darkMode ? "bg-slate-100 text-slate-900 border-slate-100" : "bg-[#1E293B] text-white border-[#1E293B]")
+                            : (darkMode ? "bg-transparent text-slate-300 border-slate-700 hover:bg-slate-800" : "bg-white text-slate-600 border-slate-300 hover:bg-slate-50")
+                        )}
+                      >
+                        {f.label}
+                        <span className={"ml-1.5 tabular " + (active ? "opacity-70" : "opacity-55")}>{f.count}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={searchTerm}
+                      onChange={e => setSearchTerm(e.target.value)}
+                      placeholder="Buscar pendiente…"
+                      className={inputCls + " sm:w-56 pr-7"}
+                    />
+                    {searchTerm && (
+                      <button
+                        onClick={() => setSearchTerm('')}
+                        className={"absolute right-2 top-1/2 -translate-y-1/2 text-[11px] font-semibold " + faint}
+                        aria-label="Limpiar búsqueda"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+
+                  <div className={"flex items-center rounded border overflow-hidden " + (darkMode ? "border-slate-700" : "border-slate-300")}>
+                    {sortOptions.map(o => {
+                      const active = sortBy === o.key;
+                      return (
+                        <button
+                          key={o.key}
+                          onClick={() => setSortBy(o.key)}
+                          className={"text-[11px] px-2.5 py-1.5 font-medium transition border-r last:border-r-0 " + (
+                            darkMode ? "border-slate-700 " : "border-slate-300 "
+                          ) + (
+                            active
+                              ? (darkMode ? "bg-slate-100 text-slate-900" : "bg-[#1E293B] text-white")
+                              : (darkMode ? "bg-transparent text-slate-300 hover:bg-slate-800" : "bg-white text-slate-600 hover:bg-slate-50")
+                          )}
+                        >
+                          {o.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    onClick={handleExportPDF}
+                    className={"h-[34px] px-3 rounded border text-[10px] font-semibold uppercase tracking-[0.08em] transition " + (
+                      darkMode ? "bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700" : "bg-white border-slate-300 text-slate-700 hover:bg-slate-50"
+                    )}
+                  >
+                    Exportar PDF
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            {/* ============ PANEL ADMIN ============ */}
+            {isAdminOpen && (
+              <section className={panel + " p-5 mb-4 no-print anim-fade"}>
+                {!isAuthenticated ? (
+                  <div className="max-w-sm mx-auto py-2">
+                    <h2 className={"text-[11px] font-semibold uppercase tracking-[0.12em] text-center mb-4 " + heading}>
+                      Verificación de administrador
+                    </h2>
+                    {authError && (
+                      <p className="text-[11px] mb-3 text-center font-medium text-rose-600">{authError}</p>
+                    )}
+                    <form onSubmit={handleLogin} className="space-y-3">
+                      <div>
+                        <label className={labelCls}>Usuario</label>
+                        <input type="text" required value={loginUser} onChange={e => setLoginUser(e.target.value)} className={inputCls} placeholder="Usuario" />
+                      </div>
+                      <div>
+                        <label className={labelCls}>Contraseña</label>
+                        <input type="password" required value={loginPass} onChange={e => setLoginPass(e.target.value)} className={inputCls} placeholder="Contraseña" />
+                      </div>
+                      <button
+                        type="submit"
+                        disabled={isLoading}
+                        className={"w-full py-2 rounded text-[11px] font-semibold uppercase tracking-[0.1em] transition disabled:opacity-60 " + (
+                          darkMode ? "bg-slate-100 text-slate-900 hover:bg-white" : "bg-[#1E293B] text-white hover:bg-slate-800"
+                        )}
+                      >
+                        Ingresar
+                      </button>
+                    </form>
+                  </div>
+                ) : (
+                  <div>
+                    {/* Reuniones */}
+                    <div className={"rounded border p-4 mb-5 " + inset}>
+                      <h3 className={"text-[10px] font-semibold uppercase tracking-[0.1em] mb-3 " + muted}>Programar reunión o alerta</h3>
+                      <form onSubmit={handleSaveEvent} className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                        <div className="md:col-span-2">
+                          <label className={labelCls}>Título</label>
+                          <input type="text" required value={eventTitle} onChange={e => setEventTitle(e.target.value)} placeholder="Ej. Reunión OCV" className={inputCls} />
+                        </div>
+                        <div>
+                          <label className={labelCls}>Fecha</label>
+                          <input type="date" required value={eventDate} onChange={e => setEventDate(e.target.value)} className={inputCls} />
+                        </div>
+                        <div>
+                          <label className={labelCls}>Hora</label>
+                          <input type="text" value={eventTime} onChange={e => setEventTime(e.target.value)} placeholder="10:00 AM" className={inputCls} />
+                        </div>
+                        <div className="md:col-span-4 flex justify-end">
+                          <button
+                            type="submit"
+                            disabled={isLoading}
+                            className={"px-4 py-2 rounded border text-[10px] font-semibold uppercase tracking-[0.08em] transition disabled:opacity-60 " + (
+                              darkMode ? "bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700" : "bg-white border-slate-300 text-slate-700 hover:bg-slate-50"
+                            )}
+                          >
+                            Añadir reunión
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+
+                    {/* Proyecto */}
+                    <div className={"flex items-baseline justify-between gap-3 border-b pb-2 mb-4 " + (darkMode ? "border-slate-800" : "border-slate-200")}>
+                      <h2 className={"text-[11px] font-semibold uppercase tracking-[0.12em] " + heading}>
+                        {editId ? 'Editar pendiente N.º ' + editId : 'Anexar nuevo pendiente'}
+                      </h2>
+                      {editId && (
+                        <button onClick={resetForm} className={"text-[10px] font-semibold uppercase tracking-[0.08em] " + muted}>
+                          Cancelar edición
+                        </button>
+                      )}
+                    </div>
+
+                    <form onSubmit={handleSaveProject} className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                      <div className="md:col-span-2">
+                        <label className={labelCls}>Título</label>
+                        <input type="text" required value={title} onChange={e => setTitle(e.target.value)} className={inputCls} />
+                      </div>
+                      <div>
+                        <label className={labelCls}>Porcentaje de avance</label>
+                        <input type="number" min="0" max="100" value={percentage} onChange={e => setPercentage(e.target.value)} className={inputCls} />
+                      </div>
+                      <div>
+                        <label className={labelCls}>Estado</label>
+                        <select value={status} onChange={e => setStatus(e.target.value)} className={inputCls}>
+                          <option value="en-tiempo">En tiempo</option>
+                          <option value="demorado">Demorado</option>
+                          <option value="detenido">Detenido</option>
+                          <option value="completado">Completado</option>
+                        </select>
+                      </div>
+                      <div className="md:col-span-2">
+                        <label className={labelCls}>Carpeta de Drive (URL)</label>
+                        <input type="url" value={driveUrl} onChange={e => setDriveUrl(e.target.value)} placeholder="https://drive.google.com/…" className={inputCls} />
+                      </div>
+                      <div className="md:col-span-2">
+                        <label className={labelCls}>Notas</label>
+                        <textarea value={notes} onChange={e => setNotes(e.target.value)} rows="2" className={inputCls}></textarea>
+                      </div>
+
+                      <div className={"md:col-span-2 rounded border p-3 " + inset}>
+                        <label className={labelCls}>Historial de actualizaciones</label>
+                        {updatesList.length === 0 && (
+                          <p className={"text-[11px] italic mb-2 " + faint}>Sin registros previos.</p>
+                        )}
+                        {updatesList.map((up, idx) => (
+                          <div key={idx} className="flex items-center gap-2 mb-2">
+                            <span className={"text-[10px] tabular w-20 shrink-0 " + faint}>{up.date}</span>
+                            <input type="text" value={up.text} onChange={e => handleUpdateChange(idx, e.target.value)} className={inputCls + " py-1.5 text-[12px]"} />
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteUpdate(idx)}
+                              className="text-[10px] font-semibold uppercase tracking-[0.06em] text-rose-600 px-1.5 shrink-0"
+                              aria-label="Eliminar actualización"
+                            >
+                              Quitar
+                            </button>
+                          </div>
+                        ))}
+                        <input
+                          type="text"
+                          value={newUpdateText}
+                          onChange={e => setNewUpdateText(e.target.value)}
+                          placeholder="Agregar nueva actualización…"
+                          className={inputCls + " mt-2"}
+                        />
+                      </div>
+
+                      <div className="md:col-span-2 flex flex-wrap items-center justify-between gap-2 pt-1">
+                        {editId ? (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteProject(projects.find(p => p.id === editId))}
+                            className={"px-3 py-2 rounded border text-[10px] font-semibold uppercase tracking-[0.08em] transition " + (
+                              darkMode ? "bg-transparent border-rose-900 text-rose-300 hover:bg-rose-950/40" : "bg-white border-rose-300 text-rose-700 hover:bg-rose-50"
+                            )}
+                          >
+                            Eliminar pendiente
+                          </button>
+                        ) : <span></span>}
+                        <button
+                          type="submit"
+                          disabled={isLoading}
+                          className={"px-5 py-2 rounded text-[10px] font-semibold uppercase tracking-[0.1em] transition disabled:opacity-60 " + (
+                            darkMode ? "bg-slate-100 text-slate-900 hover:bg-white" : "bg-[#1E293B] text-white hover:bg-slate-800"
+                          )}
+                        >
+                          {editId ? 'Guardar cambios' : 'Anexar pendiente'}
+                        </button>
+                      </div>
+                    </form>
+
+                    {/* SECCIÓN ACTUALIZADA: Menú desplegable para selección limpia de pendientes */}
+                    {projects.length > 0 && (
+                      <div className={"mt-5 pt-4 border-t " + (darkMode ? "border-slate-800" : "border-slate-200")}>
+                        <label className={labelCls}>Seleccionar pendiente para editar</label>
+                        <select
+                          value={editId || ''}
+                          onChange={(e) => {
+                            const selected = projects.find(p => String(p.id) === e.target.value);
+                            if (selected) handleEditClick(selected);
+                            else resetForm();
+                          }}
+                          className={inputCls}
+                        >
+                          <option value="">-- Seleccionar pendiente de la lista ({projects.length} disponibles) --</option>
+                          {projects.map(p => (
+                            <option key={p.id} value={p.id}>
+                              N.º {p.id} · {p.title} ({metaOf(p.status).label})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+            )}
+
+            {/* ============ VISTA PRINCIPAL ============ */}
+            <div id="exportable-area" className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+
+              {/* Columna izquierda */}
+              <div className="lg:col-span-4 space-y-4">
+
+                {/* Calendario */}
+                <div className={panel + " p-4"}>
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className={"text-[10px] font-semibold uppercase tracking-[0.1em] " + muted}>
+                      {monthNames[month]} {year}
+                    </h3>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={prevMonth}
+                        aria-label="Mes anterior"
+                        className={"w-6 h-6 rounded border text-[10px] font-semibold transition " + (
+                          darkMode ? "bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700" : "bg-white border-slate-300 text-slate-600 hover:bg-slate-50"
+                        )}
+                      >
+                        ‹
+                      </button>
+                      <button
+                        onClick={nextMonth}
+                        aria-label="Mes siguiente"
+                        className={"w-6 h-6 rounded border text-[10px] font-semibold transition " + (
+                          darkMode ? "bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700" : "bg-white border-slate-300 text-slate-600 hover:bg-slate-50"
+                        )}
+                      >
+                        ›
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className={"grid grid-cols-7 text-center text-[9px] font-semibold uppercase tracking-[0.06em] mb-1.5 " + faint}>
+                    <div>Dom</div><div>Lun</div><div>Mar</div><div>Mié</div><div>Jue</div><div>Vie</div><div>Sáb</div>
+                  </div>
+
+                  <div className="grid grid-cols-7 gap-0.5">
+                    {calendarDays.map((d, i) => {
+                      if (!d) return <div key={i} className="h-8"></div>;
+                      const dStr = d < 10 ? '0' + d : String(d);
+                      const mStr = (month + 1) < 10 ? '0' + (month + 1) : String(month + 1);
+                      const dateStr = year + "-" + mStr + "-" + dStr;
+                      const hasEv = events.some(ev => ev.date === dateStr);
+                      const isToday = (year === todayYear && month === todayMonth && d === todayDate);
+
+                      let cls = "relative h-8 flex items-center justify-center rounded text-[11px] tabular transition ";
+                      if (isToday) {
+                        cls += darkMode ? "bg-slate-100 text-slate-900 font-semibold " : "bg-[#1E293B] text-white font-semibold ";
+                      } else if (hasEv) {
+                        cls += darkMode ? "text-slate-100 font-semibold bg-slate-800 " : "text-slate-900 font-semibold bg-slate-100 ";
+                      } else {
+                        cls += darkMode ? "text-slate-300 hover:bg-slate-800 " : "text-slate-600 hover:bg-slate-100 ";
+                      }
+
+                      return (
+                        <div key={i} className={cls}>
+                          {d}
+                          {hasEv && (
+                            <span className={"absolute bottom-1 w-1 h-1 rounded-full " + (isToday ? "bg-white/80" : (darkMode ? "bg-slate-400" : "bg-slate-500"))}></span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Reuniones */}
+                <div className={panel + " p-4"}>
+                  <div className="flex items-baseline justify-between mb-2.5">
+                    <h3 className={"text-[10px] font-semibold uppercase tracking-[0.1em] " + muted}>Reuniones y alertas</h3>
+                    <span className={"text-[10px] tabular " + faint}>{events.length}</span>
+                  </div>
+                  <div className="space-y-1.5 max-h-[240px] overflow-y-auto pr-0.5">
+                    {sortedEvents.length === 0 ? (
+                      <p className={"text-[11px] italic " + faint}>Sin eventos programados.</p>
+                    ) : sortedEvents.map(ev => (
+                      <div key={ev.id} className={"rounded border px-2.5 py-2 flex items-start justify-between gap-2 " + inset}>
+                        <div className="min-w-0">
+                          <p className={"text-[12px] font-medium leading-snug truncate " + heading}>{ev.title}</p>
+                          <p className={"text-[10px] tabular mt-0.5 " + faint}>
+                            {ev.date}{ev.time ? ' · ' + ev.time : ''}
+                          </p>
+                        </div>
+                        {isAuthenticated && (
+                          <button
+                            onClick={() => handleDeleteEvent(ev.id)}
+                            className="text-[10px] font-semibold text-rose-600 shrink-0 px-1"
+                            aria-label="Eliminar reunión"
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Infraestructura */}
+                <div className={panel + " p-4"}>
+                  <div className="flex items-baseline justify-between mb-2.5">
+                    <h3 className={"text-[10px] font-semibold uppercase tracking-[0.1em] " + muted}>Infraestructura y sitios OCV</h3>
+                    <span className={"text-[10px] tabular " + faint}>{infrastructure.length}</span>
+                  </div>
+                  <div className="space-y-1.5 max-h-[280px] overflow-y-auto pr-0.5">
+                    {infrastructure.length === 0 ? (
+                      <p className={"text-[11px] italic " + faint}>Verificando sitios e IPs…</p>
+                    ) : infrastructure.map((site, idx) => {
+                      const isOnline = site.status === "En línea";
+                      return (
+                        <div key={idx} className={"rounded border px-2.5 py-2 flex items-center justify-between gap-2 " + inset}>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className={"w-1.5 h-1.5 rounded-full shrink-0 " + (isOnline ? "bg-emerald-600" : "bg-rose-600")}></span>
+                            <div className="min-w-0">
+                              <p className={"text-[12px] font-medium truncate " + heading}>{site.name}</p>
+                              <p className={"text-[10px] uppercase tracking-[0.06em] " + faint}>
+                                {isOnline ? 'En línea' : 'Fuera de línea'} · {site.lastCheck}
+                              </p>
+                            </div>
+                          </div>
+                          <a
+                            href={site.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={"shrink-0 text-[10px] font-semibold uppercase tracking-[0.06em] px-2 py-1 rounded border transition " + (
+                              darkMode ? "border-slate-700 text-slate-200 hover:bg-slate-700" : "border-slate-300 text-slate-700 hover:bg-white"
+                            )}
+                            title="Visitar sitio"
+                          >
+                            Abrir
+                          </a>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Columna derecha: línea de trabajo */}
+              <div className="lg:col-span-8">
+                <div className={panel + " p-4"}>
+                  <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+                    <h3 className={"text-[10px] font-semibold uppercase tracking-[0.1em] " + muted}>Línea de trabajo</h3>
+                    <span className={"text-[10px] " + faint}>
+                      {sortedAndFilteredProjects.length} de {totalProjectsCount} · {sortCaption}
+                    </span>
+                  </div>
+
+                  {sortedAndFilteredProjects.length === 0 ? (
+                    <div className={"rounded border border-dashed py-10 text-center " + (darkMode ? "border-slate-700" : "border-slate-300")}>
+                      <p className={"text-[11px] font-medium uppercase tracking-[0.08em] " + muted}>Sin pendientes que coincidan</p>
+                      <p className={"text-[11px] mt-1 " + faint}>Ajusta el filtro de estado o la búsqueda.</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {sortedAndFilteredProjects.map(p => {
+                        const m = metaOf(p.status);
+                        const pct = Math.max(0, Math.min(100, Number(p.percentage) || 0));
+                        return (
+                          <button
+                            key={p.id}
+                            onClick={() => setSelectedProject(p)}
+                            className={"text-left rounded border border-l-[3px] p-3 transition hover:shadow-sm " + m.rule + " " + (
+                              darkMode ? "bg-slate-900 border-slate-800 hover:border-slate-700" : "bg-white border-slate-200 hover:border-slate-300"
+                            )}
+                          >
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className={"text-[10px] font-semibold uppercase tracking-[0.1em] tabular " + faint}>N.º {p.id}</span>
+                              <span className={"text-[13px] font-semibold tabular " + heading}>{pct}%</span>
+                            </div>
+
+                            <p className={"text-[13px] font-medium leading-snug mt-1.5 line-clamp-2 " + heading}>
+                              {p.title}
+                            </p>
+
+                            <div className={"mt-2.5 h-1 w-full rounded-sm overflow-hidden " + (darkMode ? "bg-slate-800" : "bg-slate-100")}>
+                              <div className={"h-full " + m.bar} style={{ width: pct + "%" }}></div>
+                            </div>
+
+                            <div className="mt-2.5 flex items-center justify-between gap-2">
+                              <StatusLabel st={p.status} />
+                              <span className={"text-[10px] tabular " + faint}>{lastUpdateOf(p)}</span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </main>
+
+          {/* ============ MODAL DETALLE ============ */}
+          {selectedProject && (
+            <div
+              className="fixed inset-0 bg-slate-950/60 flex items-center justify-center z-50 p-4"
+              onClick={() => setSelectedProject(null)}
+            >
+              <div
+                className={"rounded border max-w-lg w-full max-h-[88vh] overflow-y-auto shadow-xl anim-fade " + (
+                  darkMode ? "bg-slate-900 border-slate-800 text-slate-100" : "bg-white border-slate-200 text-slate-900"
+                )}
+                onClick={e => e.stopPropagation()}
+              >
+                <div className={"flex items-start justify-between gap-3 px-5 pt-4 pb-3 border-b " + (darkMode ? "border-slate-800" : "border-slate-200")}>
+                  <div className="min-w-0">
+                    <p className={"text-[10px] font-semibold uppercase tracking-[0.1em] tabular " + faint}>Pendiente N.º {selectedProject.id}</p>
+                    <h2 className={"text-[15px] font-semibold leading-snug mt-1 " + heading}>{selectedProject.title}</h2>
+                  </div>
+                  <button
+                    onClick={() => setSelectedProject(null)}
+                    className={"shrink-0 text-[11px] font-semibold uppercase tracking-[0.08em] " + muted}
+                    aria-label="Cerrar"
+                  >
+                    Cerrar
+                  </button>
+                </div>
+
+                <div className="px-5 py-4">
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <StatusLabel st={selectedProject.status} />
+                    <span className={"text-[15px] font-semibold tabular " + heading}>{selectedProject.percentage}%</span>
+                  </div>
+
+                  <div className={"h-1 w-full rounded-sm overflow-hidden mb-4 " + (darkMode ? "bg-slate-800" : "bg-slate-100")}>
+                    <div
+                      className={"h-full " + metaOf(selectedProject.status).bar}
+                      style={{ width: Math.max(0, Math.min(100, Number(selectedProject.percentage) || 0)) + "%" }}
+                    ></div>
+                  </div>
+
+                  {selectedProject.notes && (
+                    <div className={"mb-4 rounded border px-3 py-2.5 " + (darkMode ? "bg-slate-800/60 border-slate-700" : "bg-slate-50 border-slate-200")}>
+                      <p className={"text-[10px] font-semibold uppercase tracking-[0.1em] mb-1 " + muted}>Notas</p>
+                      <p className={"text-[12px] leading-relaxed " + (darkMode ? "text-slate-200" : "text-slate-700")}>{selectedProject.notes}</p>
+                    </div>
+                  )}
+
+                  <div className="mb-4">
+                    <p className={"text-[10px] font-semibold uppercase tracking-[0.1em] mb-2 " + muted}>Historial de actualizaciones</p>
+                    {selectedProject.updates && selectedProject.updates.length > 0 ? (
+                      <ul className={"divide-y " + (darkMode ? "divide-slate-800" : "divide-slate-200")}>
+                        {selectedProject.updates.map((up, idx) => (
+                          <li key={idx} className="py-2 flex gap-3">
+                            <span className={"text-[10px] tabular shrink-0 w-20 pt-0.5 " + faint}>{up.date}</span>
+                            <span className={"text-[12px] leading-relaxed " + (darkMode ? "text-slate-200" : "text-slate-700")}>{up.text}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className={"text-[11px] italic " + faint}>No hay actualizaciones registradas.</p>
+                    )}
+                  </div>
+
+                  {selectedProject.driveUrl && (
+                    <a
+                      href={selectedProject.driveUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={"inline-flex items-center gap-2 rounded border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] transition " + (
+                        darkMode ? "border-slate-700 text-slate-100 hover:bg-slate-800" : "border-slate-300 text-slate-700 hover:bg-slate-50"
+                      )}
+                    >
+                      Abrir carpeta en Drive
+                    </a>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
